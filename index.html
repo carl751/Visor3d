@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Visor 3D</title>
+
+<style>
+body{
+  margin:0;
+  overflow:hidden;
+  font-family:Arial,sans-serif;
+}
+
+canvas{
+  display:block;
+}
+</style>
+
+<script type="importmap">
+{
+  "imports":{
+    "three":"https://unpkg.com/three@0.152.2/build/three.module.js",
+    "three/addons/":"https://unpkg.com/three@0.152.2/examples/jsm/"
+  }
+}
+</script>
+
+</head>
+<body>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.18/+esm';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#212121');
+
+const camera = new THREE.PerspectiveCamera(
+  60,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  5000
+);
+camera.position.set(3,3,5);
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(window.innerWidth,window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera,renderer.domElement);
+controls.enableDamping = true;
+
+const hemiLight = new THREE.HemisphereLight(0xffffff,0x444444,1.2);
+scene.add(hemiLight);
+
+const dirLight = new THREE.DirectionalLight(0xffffff,1);
+dirLight.position.set(5,10,7);
+scene.add(dirLight);
+
+const grid = new THREE.GridHelper(10,20);
+scene.add(grid);
+
+const edgeGroup = new THREE.Group();
+scene.add(edgeGroup);
+
+let currentModel = null;
+let baseCameraDistance = 10;
+let modelCenter = new THREE.Vector3(0,0,0);
+
+const settings = {
+  fondo:'#2b2b2b',
+  rejilla:true,
+  wireframe:false,
+  aristas:false,
+  rayosX:false,
+  luzHemisferica:false,
+  luzDireccional:true,
+  centrarVista:()=>{
+    if(!currentModel) return;
+    encuadrarModelo(currentModel);
+  },
+  vistaFrontal:()=>{
+    colocarCamara('frontal');
+  },
+  vistaLateral:()=>{
+    colocarCamara('lateral');
+  },
+  vistaSuperior:()=>{
+    colocarCamara('superior');
+  }
+};
+
+const gui = new GUI();
+
+gui.addColor(settings,'fondo').name('Color fondo').onChange((value)=>{
+  scene.background = new THREE.Color(value);
+});
+
+gui.add(settings,'rejilla').name('Mostrar rejilla').onChange((value)=>{
+  grid.visible = value;
+});
+
+gui.add(settings,'wireframe').name('Wireframe').onChange((value)=>{
+  if(!currentModel) return;
+  aplicarModoMaterial(currentModel);
+});
+
+gui.add(settings,'aristas').name('Aristas negras').onChange((value)=>{
+  if(!currentModel) return;
+  actualizarAristas(currentModel, value);
+});
+
+gui.add(settings,'rayosX').name('Modo rayos X').onChange((value)=>{
+  if(!currentModel) return;
+  aplicarModoMaterial(currentModel);
+});
+
+gui.add(settings,'luzHemisferica').name('Luz hemisférica').onChange((value)=>{
+  hemiLight.visible = value;
+});
+
+gui.add(settings,'luzDireccional').name('Luz direccional').onChange((value)=>{
+  dirLight.visible = value;
+});
+
+gui.add(settings,'centrarVista').name('Centrar pieza');
+gui.add(settings,'vistaFrontal').name('Vista frontal');
+gui.add(settings,'vistaLateral').name('Vista lateral');
+gui.add(settings,'vistaSuperior').name('Vista superior');
+
+const loader = new GLTFLoader();
+
+function limpiarAristas(){
+  while(edgeGroup.children.length > 0){
+    const child = edgeGroup.children[0];
+    edgeGroup.remove(child);
+    if(child.geometry) child.geometry.dispose();
+    if(child.material) child.material.dispose();
+  }
+}
+
+function actualizarAristas(model, enabled){
+  limpiarAristas();
+  if(!enabled) return;
+
+  model.traverse((child)=>{
+    if(child.isMesh && child.geometry){
+      const edges = new THREE.EdgesGeometry(child.geometry);
+      const line = new THREE.LineSegments(
+        edges,
+        new THREE.LineBasicMaterial({ color: 0x000000 })
+      );
+
+      line.position.copy(child.getWorldPosition(new THREE.Vector3()));
+      line.quaternion.copy(child.getWorldQuaternion(new THREE.Quaternion()));
+      line.scale.copy(child.getWorldScale(new THREE.Vector3()));
+      edgeGroup.add(line);
+    }
+  });
+}
+
+function aplicarModoMaterial(model){
+  model.traverse((child)=>{
+    if(child.isMesh && child.material){
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+
+      materials.forEach((mat)=>{
+        mat.wireframe = settings.wireframe;
+
+        if(settings.rayosX){
+          mat.transparent = true;
+          mat.opacity = 0.35;
+          mat.depthWrite = false;
+        }else{
+          mat.transparent = false;
+          mat.opacity = 1;
+          mat.depthWrite = true;
+        }
+
+        mat.needsUpdate = true;
+      });
+    }
+  });
+
+  actualizarAristas(model, settings.aristas);
+}
+
+function encuadrarModelo(model){
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+
+  model.position.sub(center);
+  modelCenter.set(0,0,0);
+
+  const newBox = new THREE.Box3().setFromObject(model);
+  const newSize = newBox.getSize(new THREE.Vector3());
+  const maxDim = Math.max(newSize.x,newSize.y,newSize.z);
+
+  const fov = camera.fov * (Math.PI / 180);
+  let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+  cameraZ *= 2.2;
+
+  baseCameraDistance = cameraZ;
+
+  camera.position.set(0,maxDim * 0.5,cameraZ);
+  camera.near = Math.max(0.1,maxDim / 100);
+  camera.far = Math.max(1000,maxDim * 100);
+  camera.updateProjectionMatrix();
+
+  controls.target.set(0,0,0);
+  controls.update();
+
+  grid.position.y = -newSize.y / 2;
+
+  actualizarAristas(model, settings.aristas);
+}
+
+function colocarCamara(tipo){
+  if(!currentModel) return;
+
+  switch(tipo){
+    case 'frontal':
+      camera.position.set(0, 0, baseCameraDistance);
+      break;
+    case 'lateral':
+      camera.position.set(baseCameraDistance, 0, 0);
+      break;
+    case 'superior':
+      camera.position.set(0, baseCameraDistance, 0.001);
+      break;
+  }
+
+  camera.lookAt(0,0,0);
+  controls.target.set(0,0,0);
+  controls.update();
+}
+
+loader.load(
+  'modelo.glb',
+  function(gltf){
+    currentModel = gltf.scene;
+    scene.add(currentModel);
+
+    aplicarModoMaterial(currentModel);
+    encuadrarModelo(currentModel);
+
+    console.log('Modelo cargado correctamente');
+  },
+  undefined,
+  function(error){
+    console.error('Error cargando modelo:', error);
+  }
+);
+
+function animate(){
+  requestAnimationFrame(animate);
+  controls.update();
+
+  if(currentModel && settings.aristas){
+    actualizarAristas(currentModel, true);
+  }
+
+  renderer.render(scene,camera);
+}
+animate();
+
+window.addEventListener('resize',()=>{
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth,window.innerHeight);
+});
+</script>
+
+</body>
+</html>
