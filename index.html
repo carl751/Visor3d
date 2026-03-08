@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Visor 3D</title>
+
+<style>
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  font-family: Arial, sans-serif;
+  background: #212121;
+}
+
+#viewer {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.152.2/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.152.2/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<div id="viewer"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import GUI from 'https://cdn.jsdelivr.net/npm/lil-gui@0.18/+esm';
+
+const container = document.getElementById('viewer');
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#212121');
+
+const camera = new THREE.PerspectiveCamera(
+  60,
+  container.clientWidth / container.clientHeight,
+  0.1,
+  5000
+);
+camera.position.set(3, 3, 5);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(container.clientWidth, container.clientHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NoToneMapping;
+container.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.22);
+scene.add(ambientLight);
+
+const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.55);
+scene.add(hemiLight);
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.28);
+dirLight.position.set(5, 10, 7);
+scene.add(dirLight);
+
+const grid = new THREE.GridHelper(10, 20);
+grid.visible = false;
+scene.add(grid);
+
+let currentModel = null;
+let baseCameraDistance = 10;
+
+const settings = {
+  fondo: '#212121',
+  colorPieza: '#bdbdbd',
+  rejilla: false,
+  wireframe: false,
+  luzAmbiente: true,
+  luzHemisferica: true,
+  luzDireccional: true
+};
+
+const gui = new GUI();
+
+gui.addColor(settings, 'fondo').name('Color fondo').onChange((value) => {
+  scene.background = new THREE.Color(value);
+});
+
+gui.addColor(settings, 'colorPieza').name('Color pieza').onChange(() => {
+  if (!currentModel) return;
+  aplicarColorPieza(currentModel, settings.colorPieza);
+});
+
+gui.add(settings, 'rejilla').name('Mostrar rejilla').onChange((value) => {
+  grid.visible = value;
+});
+
+gui.add(settings, 'wireframe').name('Wireframe').onChange(() => {
+  if (!currentModel) return;
+  aplicarAspectoMaterial(currentModel);
+});
+
+gui.add(settings, 'luzAmbiente').name('Luz ambiente').onChange((value) => {
+  ambientLight.visible = value;
+});
+
+gui.add(settings, 'luzHemisferica').name('Luz hemisférica').onChange((value) => {
+  hemiLight.visible = value;
+});
+
+gui.add(settings, 'luzDireccional').name('Luz direccional').onChange((value) => {
+  dirLight.visible = value;
+});
+
+function aplicarColorPieza(model, colorHex) {
+  model.traverse((child) => {
+    if (child.isMesh && child.material) {
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+
+      materials.forEach((mat) => {
+        if ('color' in mat) {
+          mat.color = new THREE.Color(colorHex);
+        }
+        mat.needsUpdate = true;
+      });
+    }
+  });
+}
+
+function aplicarAspectoMaterial(model) {
+  model.traverse((child) => {
+    if (child.isMesh && child.material) {
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+
+      materials.forEach((mat) => {
+        if ('color' in mat) {
+          mat.color = new THREE.Color(settings.colorPieza);
+        }
+        mat.wireframe = settings.wireframe;
+
+        if ('metalness' in mat) mat.metalness = 0.0;
+        if ('roughness' in mat) mat.roughness = 1.0;
+        if ('envMapIntensity' in mat) mat.envMapIntensity = 0.0;
+
+        mat.needsUpdate = true;
+      });
+    }
+  });
+}
+
+function encuadrarModelo(model) {
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+
+  model.position.sub(center);
+
+  const newBox = new THREE.Box3().setFromObject(model);
+  const newSize = newBox.getSize(new THREE.Vector3());
+  const maxDim = Math.max(newSize.x, newSize.y, newSize.z);
+
+  const fov = camera.fov * (Math.PI / 180);
+  let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
+  cameraZ *= 2.2;
+
+  baseCameraDistance = cameraZ;
+
+  camera.position.set(0, maxDim * 0.5, cameraZ);
+  camera.near = Math.max(0.1, maxDim / 100);
+  camera.far = Math.max(1000, maxDim * 100);
+  camera.updateProjectionMatrix();
+
+  controls.target.set(0, 0, 0);
+  controls.update();
+
+  grid.position.y = -newSize.y / 2;
+}
+
+const loader = new GLTFLoader();
+
+loader.load(
+  'modelo.glb',
+  function (gltf) {
+    currentModel = gltf.scene;
+    scene.add(currentModel);
+
+    aplicarAspectoMaterial(currentModel);
+    encuadrarModelo(currentModel);
+
+    console.log('Modelo cargado correctamente');
+  },
+  undefined,
+  function (error) {
+    console.error('Error cargando modelo:', error);
+  }
+);
+
+function resizeRenderer() {
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+  renderer.setSize(width, height);
+}
+
+window.addEventListener('resize', resizeRenderer);
+
+const resizeObserver = new ResizeObserver(() => {
+  resizeRenderer();
+});
+resizeObserver.observe(container);
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+
+</body>
+</html>
